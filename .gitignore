@@ -1,0 +1,6 @@
+.env
+.env.*
+!.env.example
+alerts.db
+__pycache__/
+*.pyc

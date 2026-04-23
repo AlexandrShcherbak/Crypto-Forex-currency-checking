@@ -2,6 +2,7 @@ import os
 import sqlite3
 import asyncio
 from datetime import datetime, timedelta
+from statistics import median
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 import aiohttp
@@ -10,19 +11,158 @@ from threading import Thread
 import signal
 import sys
 
-TELEGRAM_TOKEN = "YOUR_BOT_TOKEN"
-FCSAPI_KEY = ""
-SUPPORT_USERNAME = "iyadbakri"
-SUPPORT_PHONE = "+79522677714"
-MAX_FREE_ALERTS = 3
+# ========== Config from env (secure by default) ==========
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+FCSAPI_KEY = os.getenv("FCSAPI_KEY", "")
+SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "iyadbakri")
+SUPPORT_PHONE = os.getenv("SUPPORT_PHONE", "+79522677714")
+MAX_FREE_ALERTS = int(os.getenv("MAX_FREE_ALERTS", "3"))
+DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "8080"))
 
-CRYPTO_SYMBOLS = ['BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'DOGE', 'ADA']
-FOREX_SYMBOLS = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'NZDUSD', 'XAUUSD']
+CRYPTO_SYMBOLS = ['BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'DOGE', 'ADA', 'LTC', 'TRX', 'DOT']
+FOREX_SYMBOLS = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'NZDUSD', 'USDCHF', 'EURJPY', 'GBPJPY', 'XAUUSD']
 
 CRYPTO_IDS = {
-    'BTC': 'bitcoin', 'ETH': 'ethereum', 'BNB': 'binancecoin',
-    'SOL': 'solana', 'XRP': 'ripple', 'DOGE': 'dogecoin', 'ADA': 'cardano'
+    'BTC': 'bitcoin', 'ETH': 'ethereum', 'BNB': 'binancecoin', 'SOL': 'solana', 'XRP': 'ripple',
+    'DOGE': 'dogecoin', 'ADA': 'cardano', 'LTC': 'litecoin', 'TRX': 'tron', 'DOT': 'polkadot'
 }
+
+SUPPORTED_LANGS = ["en", "ru", "ar"]
+
+I18N = {
+    "en": {
+        "language_name": "English",
+        "app_title": "🚀 *BRIDGES - Crypto & Forex Alert Bot*",
+        "start_body": "Monitor prices and receive instant alerts!\n\n• Free plan: {max_alerts} active alerts\n• Premium: Unlimited alerts ($5/month)\n\nChoose an option:",
+        "btn_add_alert": "➕ Add Alert",
+        "btn_my_alerts": "📋 My Alerts",
+        "btn_prices": "💰 Prices",
+        "btn_my_plan": "⭐ My Plan",
+        "btn_support": "📞 Support",
+        "btn_language": "🌍 Language",
+        "cancelled": "❌ Cancelled.",
+        "select_asset": "Choose asset type:",
+        "add_alert_title": "➕ *Add New Alert*\n\nChoose asset type:",
+        "choose_crypto": "Choose crypto symbol:",
+        "choose_forex": "Choose forex pair:",
+        "enter_custom_crypto": "✏️ Enter custom crypto symbol (e.g., LTC, MATIC):",
+        "enter_custom_forex": "✏️ Enter custom forex pair (e.g., EURGBP):",
+        "send_target_price": "📝 Send target price (e.g., {example}):",
+        "symbol_saved": "✅ Symbol: {symbol}\n\n📝 Send target price:",
+        "invalid_number": "⚠️ Send a valid number (e.g., 1.1050).",
+        "use_buttons": "🌟 Use the buttons.",
+        "no_alerts": "📋 No active alerts.",
+        "my_alerts_title": "*📋 Your Alerts:*",
+        "alert_line": "• {emoji} {symbol} {dir_text} ${price:,.2f}",
+        "dir_above": "🔺 Above",
+        "dir_below": "🔻 Below",
+        "choose_direction": "Choose alert direction for {symbol}:",
+        "dir_saved": "✅ Direction: {dir_text}\n\n📝 Send target price:",
+        "free_limit": "⚠️ *Free limit reached ({max_alerts} alerts)!*\n\nUpgrade to Premium ($5/month) for unlimited alerts.\n📱 Contact: @{support}",
+        "alert_added": "✅ *Alert added!*\n\n• {symbol}\n• Target: ${price:,.2f}\n• Direction: {dir_text}",
+        "prices_header": "*💰 Live Prices:*\n\n*₿ Crypto:*",
+        "prices_forex": "\n*💱 Forex:*",
+        "support": "📞 *Support & Premium Upgrade*\n\n⭐ *Upgrade to Premium:*\n💰 *Price:* $5/month\n✨ *Benefits:* Unlimited alerts + Priority support\n\n📱 *Contact us to upgrade:*\n• WhatsApp: {phone}\n• Telegram: @{username}\n\n🕒 *Hours:* 9AM - 5PM (Friday off)\n\n_After payment, your account will be activated within minutes_",
+        "plan_premium": "🌟 *Your Plan: Premium*\n\n📊 Active alerts: {count} / unlimited\n📅 Expires in: {days} days\n💎 You have full access!",
+        "plan_premium_no_exp": "🌟 *Your Plan: Premium*\n\n📊 Active alerts: {count} / unlimited\n💎 You have full access!",
+        "plan_free": "📊 *Your Plan: Free*\n\n📈 Active alerts: {count} / {max_alerts}\n\n💰 Upgrade to Premium ($5/month) for unlimited alerts!\n📱 Contact: @{support}",
+        "lang_title": "🌍 *Choose language / Выберите язык / اختر اللغة*",
+        "lang_changed": "✅ Language set to {lang_name}.",
+        "price_unavailable": "⚠️",
+        "sub_expired": "⚠️ *Your Premium subscription has expired!*\n\nYour account has been downgraded to Free.\nTo renew, please contact: @{support}",
+        "sub_reminder": "🔔 *Reminder: Your Premium subscription expires in {days} days!*\n\nPlease contact @{support} to renew and avoid interruption.",
+    },
+    "ru": {
+        "language_name": "Русский",
+        "app_title": "🚀 *BRIDGES - Бот алертов Crypto & Forex*",
+        "start_body": "Следите за ценами и получайте мгновенные алерты!\n\n• Бесплатно: {max_alerts} активных алерта\n• Premium: без ограничений ($5/месяц)\n\nВыберите действие:",
+        "btn_add_alert": "➕ Добавить алерт",
+        "btn_my_alerts": "📋 Мои алерты",
+        "btn_prices": "💰 Цены",
+        "btn_my_plan": "⭐ Мой тариф",
+        "btn_support": "📞 Поддержка",
+        "btn_language": "🌍 Язык",
+        "cancelled": "❌ Отменено.",
+        "select_asset": "Выберите тип актива:",
+        "add_alert_title": "➕ *Новый алерт*\n\nВыберите тип актива:",
+        "choose_crypto": "Выберите крипто-символ:",
+        "choose_forex": "Выберите forex-пару:",
+        "enter_custom_crypto": "✏️ Введите свой крипто-символ (например, LTC, MATIC):",
+        "enter_custom_forex": "✏️ Введите свою forex-пару (например, EURGBP):",
+        "send_target_price": "📝 Отправьте целевую цену (например, {example}):",
+        "symbol_saved": "✅ Символ: {symbol}\n\n📝 Отправьте целевую цену:",
+        "invalid_number": "⚠️ Введите корректное число (например, 1.1050).",
+        "use_buttons": "🌟 Используйте кнопки.",
+        "no_alerts": "📋 Нет активных алертов.",
+        "my_alerts_title": "*📋 Ваши алерты:*",
+        "alert_line": "• {emoji} {symbol} {dir_text} ${price:,.2f}",
+        "dir_above": "🔺 Выше",
+        "dir_below": "🔻 Ниже",
+        "choose_direction": "Выберите направление для {symbol}:",
+        "dir_saved": "✅ Направление: {dir_text}\n\n📝 Отправьте целевую цену:",
+        "free_limit": "⚠️ *Лимит бесплатного тарифа ({max_alerts} алерта) достигнут!*\n\nПерейдите на Premium ($5/месяц) для безлимита.\n📱 Контакт: @{support}",
+        "alert_added": "✅ *Алерт добавлен!*\n\n• {symbol}\n• Цель: ${price:,.2f}\n• Направление: {dir_text}",
+        "prices_header": "*💰 Текущие цены:*\n\n*₿ Крипто:*",
+        "prices_forex": "\n*💱 Форекс:*",
+        "support": "📞 *Поддержка и Premium*\n\n⭐ *Переход на Premium:*\n💰 *Цена:* $5/месяц\n✨ *Плюсы:* безлимит алертов + приоритетная поддержка\n\n📱 *Связаться:*\n• WhatsApp: {phone}\n• Telegram: @{username}\n\n🕒 *Часы:* 9:00 - 17:00 (пятница выходной)\n\n_После оплаты аккаунт активируется в течение нескольких минут_",
+        "plan_premium": "🌟 *Ваш тариф: Premium*\n\n📊 Активные алерты: {count} / безлимит\n📅 Осталось: {days} дн.\n💎 У вас полный доступ!",
+        "plan_premium_no_exp": "🌟 *Ваш тариф: Premium*\n\n📊 Активные алерты: {count} / безлимит\n💎 У вас полный доступ!",
+        "plan_free": "📊 *Ваш тариф: Free*\n\n📈 Активные алерты: {count} / {max_alerts}\n\n💰 Перейдите на Premium ($5/месяц) для безлимита!\n📱 Контакт: @{support}",
+        "lang_title": "🌍 *Choose language / Выберите язык / اختر اللغة*",
+        "lang_changed": "✅ Язык переключен: {lang_name}.",
+        "price_unavailable": "⚠️",
+        "sub_expired": "⚠️ *Ваша Premium-подписка истекла!*\n\nАккаунт переведен на Free.\nДля продления: @{support}",
+        "sub_reminder": "🔔 *Напоминание: Premium истекает через {days} дн.!*\n\nСвяжитесь с @{support}, чтобы продлить подписку.",
+    },
+    "ar": {
+        "language_name": "العربية",
+        "app_title": "🚀 *BRIDGES - بوت تنبيهات الكريبتو والفوركس*",
+        "start_body": "تابع الأسعار واحصل على تنبيهات فورية!\n\n• الخطة المجانية: {max_alerts} تنبيهات نشطة\n• Premium: تنبيهات غير محدودة (5$/شهرياً)\n\nاختر من القائمة:",
+        "btn_add_alert": "➕ إضافة تنبيه",
+        "btn_my_alerts": "📋 تنبيهاتي",
+        "btn_prices": "💰 الأسعار",
+        "btn_my_plan": "⭐ خطتي",
+        "btn_support": "📞 الدعم",
+        "btn_language": "🌍 اللغة",
+        "cancelled": "❌ تم الإلغاء.",
+        "select_asset": "اختر نوع الأصل:",
+        "add_alert_title": "➕ *إضافة تنبيه جديد*\n\nاختر نوع الأصل:",
+        "choose_crypto": "اختر رمز الكريبتو:",
+        "choose_forex": "اختر زوج الفوركس:",
+        "enter_custom_crypto": "✏️ أدخل رمز كريبتو مخصص (مثال: LTC, MATIC):",
+        "enter_custom_forex": "✏️ أدخل زوج فوركس مخصص (مثال: EURGBP):",
+        "send_target_price": "📝 أرسل السعر المستهدف (مثال: {example}):",
+        "symbol_saved": "✅ الرمز: {symbol}\n\n📝 أرسل السعر المستهدف:",
+        "invalid_number": "⚠️ أرسل رقماً صحيحاً (مثال: 1.1050).",
+        "use_buttons": "🌟 استخدم الأزرار.",
+        "no_alerts": "📋 لا توجد تنبيهات نشطة.",
+        "my_alerts_title": "*📋 تنبيهاتك:*",
+        "alert_line": "• {emoji} {symbol} {dir_text} ${price:,.2f}",
+        "dir_above": "🔺 أعلى من",
+        "dir_below": "🔻 أقل من",
+        "choose_direction": "اختر اتجاه التنبيه لـ {symbol}:",
+        "dir_saved": "✅ الاتجاه: {dir_text}\n\n📝 أرسل السعر المستهدف:",
+        "free_limit": "⚠️ *تم الوصول لحد الخطة المجانية ({max_alerts} تنبيهات)!*\n\nاشترك Premium (5$/شهرياً) لتنبيهات غير محدودة.\n📱 التواصل: @{support}",
+        "alert_added": "✅ *تمت إضافة التنبيه!*\n\n• {symbol}\n• الهدف: ${price:,.2f}\n• الاتجاه: {dir_text}",
+        "prices_header": "*💰 الأسعار المباشرة:*\n\n*₿ العملات الرقمية:*",
+        "prices_forex": "\n*💱 الفوركس:*",
+        "support": "📞 *الدعم والاشتراك Premium*\n\n⭐ *الترقية إلى Premium:*\n💰 *السعر:* 5$/شهرياً\n✨ *المميزات:* تنبيهات غير محدودة + دعم أولوية\n\n📱 *تواصل معنا:*\n• واتساب: {phone}\n• تيليجرام: @{username}\n\n🕒 *الدوام:* 9 صباحاً - 5 مساءً (الجمعة عطلة)\n\n_بعد الدفع سيتم تفعيل الحساب خلال دقائق_",
+        "plan_premium": "🌟 *خطتك: Premium*\n\n📊 التنبيهات النشطة: {count} / غير محدود\n📅 ينتهي خلال: {days} يوم\n💎 لديك وصول كامل!",
+        "plan_premium_no_exp": "🌟 *خطتك: Premium*\n\n📊 التنبيهات النشطة: {count} / غير محدود\n💎 لديك وصول كامل!",
+        "plan_free": "📊 *خطتك: Free*\n\n📈 التنبيهات النشطة: {count} / {max_alerts}\n\n💰 اشترك Premium (5$/شهرياً) لتنبيهات غير محدودة!\n📱 التواصل: @{support}",
+        "lang_title": "🌍 *Choose language / Выберите язык / اختر اللغة*",
+        "lang_changed": "✅ تم اختيار اللغة: {lang_name}.",
+        "price_unavailable": "⚠️",
+        "sub_expired": "⚠️ *انتهى اشتراك Premium!*\n\nتم تحويل حسابك إلى الخطة المجانية.\nللتجديد تواصل مع: @{support}",
+        "sub_reminder": "🔔 *تذكير: ينتهي اشتراك Premium خلال {days} يوم!*\n\nتواصل مع @{support} للتجديد.",
+    }
+}
+
+
+def tr(lang: str, key: str, **kwargs) -> str:
+    text = I18N.get(lang, I18N["en"]).get(key, I18N["en"].get(key, key))
+    return text.format(**kwargs) if kwargs else text
+
 
 # ========== Database ==========
 def init_db():
@@ -32,11 +172,18 @@ def init_db():
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
             username TEXT,
+            language TEXT DEFAULT 'en',
             is_premium INTEGER DEFAULT 0,
             premium_until TIMESTAMP,
             created_at TIMESTAMP
         )
     ''')
+    # Migration for old DBs
+    c.execute("PRAGMA table_info(users)")
+    cols = [row[1] for row in c.fetchall()]
+    if 'language' not in cols:
+        c.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'en'")
+
     c.execute('''
         CREATE TABLE IF NOT EXISTS alerts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,30 +200,52 @@ def init_db():
     conn.close()
     print("✅ DB ready")
 
+
 def save_user(user_id, username):
     conn = sqlite3.connect('alerts.db')
     c = conn.cursor()
     c.execute("INSERT OR IGNORE INTO users (user_id, username, created_at) VALUES (?, ?, ?)",
-              (user_id, username, datetime.now()))
+              (user_id, username, datetime.now().isoformat()))
+    c.execute("UPDATE users SET username = COALESCE(?, username) WHERE user_id = ?", (username, user_id))
     conn.commit()
     conn.close()
+
 
 def get_user(user_id):
     conn = sqlite3.connect('alerts.db')
     c = conn.cursor()
-    c.execute("SELECT user_id, username, is_premium, premium_until FROM users WHERE user_id = ?", (user_id,))
+    c.execute("SELECT user_id, username, language, is_premium, premium_until FROM users WHERE user_id = ?", (user_id,))
     user = c.fetchone()
     conn.close()
     return user
+
+
+def get_user_lang(user_id):
+    user = get_user(user_id)
+    if user and user[2] in SUPPORTED_LANGS:
+        return user[2]
+    return "en"
+
+
+def set_user_language(user_id, lang):
+    if lang not in SUPPORTED_LANGS:
+        return
+    conn = sqlite3.connect('alerts.db')
+    c = conn.cursor()
+    c.execute("UPDATE users SET language = ? WHERE user_id = ?", (lang, user_id))
+    conn.commit()
+    conn.close()
+
 
 def upgrade_user(user_id, days=30):
     conn = sqlite3.connect('alerts.db')
     c = conn.cursor()
     premium_until = datetime.now() + timedelta(days=days)
-    c.execute("UPDATE users SET is_premium = 1, premium_until = ? WHERE user_id = ?", (premium_until, user_id))
+    c.execute("UPDATE users SET is_premium = 1, premium_until = ? WHERE user_id = ?", (premium_until.isoformat(), user_id))
     conn.commit()
     conn.close()
     print(f"✅ User {user_id} upgraded to Premium until {premium_until}")
+
 
 def downgrade_user(user_id):
     conn = sqlite3.connect('alerts.db')
@@ -86,6 +255,7 @@ def downgrade_user(user_id):
     conn.close()
     print(f"⚠️ User {user_id} downgraded to Free")
 
+
 def get_active_alerts_count(user_id):
     conn = sqlite3.connect('alerts.db')
     c = conn.cursor()
@@ -94,15 +264,17 @@ def get_active_alerts_count(user_id):
     conn.close()
     return count
 
+
 def save_alert(user_id, asset_type, symbol, target_price, direction):
     conn = sqlite3.connect('alerts.db')
     c = conn.cursor()
     c.execute('''
         INSERT INTO alerts (user_id, asset_type, symbol, target_price, direction, created_at)
         VALUES (?, ?, ?, ?, ?, ?)
-    ''', (user_id, asset_type, symbol, target_price, direction, datetime.now()))
+    ''', (user_id, asset_type, symbol, target_price, direction, datetime.now().isoformat()))
     conn.commit()
     conn.close()
+
 
 def get_user_alerts(user_id):
     conn = sqlite3.connect('alerts.db')
@@ -112,6 +284,7 @@ def get_user_alerts(user_id):
     conn.close()
     return alerts
 
+
 def deactivate_alert(alert_id):
     conn = sqlite3.connect('alerts.db')
     c = conn.cursor()
@@ -119,11 +292,12 @@ def deactivate_alert(alert_id):
     conn.commit()
     conn.close()
 
+
 def get_all_users_for_dashboard():
     conn = sqlite3.connect('alerts.db')
     c = conn.cursor()
     c.execute('''
-        SELECT u.user_id, u.username, u.is_premium, u.premium_until, u.created_at,
+        SELECT u.user_id, u.username, u.language, u.is_premium, u.premium_until, u.created_at,
                (SELECT COUNT(*) FROM alerts WHERE user_id = u.user_id AND is_active = 1) as alerts_count
         FROM users u ORDER BY u.created_at DESC
     ''')
@@ -135,8 +309,8 @@ def get_all_users_for_dashboard():
         days_left = None
         start_date = None
         warning = ""
-        if user[2] == 1 and user[3]:
-            expiry = datetime.fromisoformat(user[3])
+        if user[3] == 1 and user[4]:
+            expiry = datetime.fromisoformat(user[4])
             days_left = (expiry - now).days
             start_date = expiry - timedelta(days=30)
             if days_left < 0:
@@ -150,15 +324,17 @@ def get_all_users_for_dashboard():
         result.append({
             'user_id': user[0],
             'username': user[1],
-            'is_premium': user[2],
-            'premium_until': user[3],
+            'language': user[2] or 'en',
+            'is_premium': user[3],
+            'premium_until': user[4],
             'start_date': start_date.strftime('%Y-%m-%d') if start_date else None,
-            'created_at': user[4],
-            'alerts_count': user[5],
+            'created_at': user[5],
+            'alerts_count': user[6],
             'days_left': days_left,
             'warning': warning
         })
     return result
+
 
 def get_stats():
     conn = sqlite3.connect('alerts.db')
@@ -172,133 +348,109 @@ def get_stats():
     conn.close()
     return total_users, premium_users, active_alerts
 
+
 # ========== Price Fetching ==========
-async def get_crypto_price(symbol):
+async def fetch_json(url, timeout=10):
     try:
-        coin_id = CRYPTO_IDS.get(symbol)
-        if not coin_id:
-            return None
-        url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd"
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as response:
+            async with session.get(url, timeout=timeout) as response:
                 if response.status == 200:
-                    data = await response.json()
-                    return data.get(coin_id, {}).get('usd')
-    except:
-        pass
+                    return await response.json()
+    except Exception:
+        return None
     return None
 
-async def get_crypto_price_fallback(symbol):
-    try:
-        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    price = float(data['price'])
-                    print(f"✅ [Binance] {symbol} = {price}")
-                    return price
-    except:
-        pass
-    try:
-        url = f"https://api.kraken.com/0/public/Ticker?pair={symbol}USD"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    for pair, values in data.get('result', {}).items():
-                        price = float(values['c'][0])
-                        print(f"✅ [Kraken] {symbol} = {price}")
-                        return price
-    except:
-        pass
-    return None
+
+async def get_crypto_sources(symbol):
+    sources = []
+
+    coin_id = CRYPTO_IDS.get(symbol)
+    if coin_id:
+        data = await fetch_json(f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd")
+        if data and data.get(coin_id, {}).get('usd'):
+            sources.append(float(data[coin_id]['usd']))
+
+    data = await fetch_json(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT")
+    if data and data.get('price'):
+        sources.append(float(data['price']))
+
+    kraken_pair = f"{symbol}USD"
+    data = await fetch_json(f"https://api.kraken.com/0/public/Ticker?pair={kraken_pair}")
+    if data and data.get('result'):
+        for _, values in data['result'].items():
+            if 'c' in values and values['c']:
+                sources.append(float(values['c'][0]))
+                break
+
+    data = await fetch_json(f"https://api.coinbase.com/v2/prices/{symbol}-USD/spot")
+    if data and data.get('data', {}).get('amount'):
+        sources.append(float(data['data']['amount']))
+
+    return sources
+
+
+async def get_crypto_price(symbol):
+    prices = await get_crypto_sources(symbol)
+    if not prices:
+        return None
+    stable_price = median(prices)
+    print(f"✅ [CRYPTO-MEDIAN] {symbol} = {stable_price} from {len(prices)} source(s)")
+    return stable_price
+
+
+async def get_forex_sources(symbol):
+    sources = []
+    from_currency = symbol[:3]
+    to_currency = symbol[3:]
+
+    if FCSAPI_KEY:
+        if symbol == 'XAUUSD':
+            url = f"https://fcsapi.com/api-v3/commodity/latest?symbol={symbol}&type=commodity&access_key={FCSAPI_KEY}"
+        else:
+            url = f"https://fcsapi.com/api-v3/forex/latest?symbol={symbol}&access_key={FCSAPI_KEY}"
+        data = await fetch_json(url)
+        if data and data.get('status') and data.get('response'):
+            try:
+                sources.append(float(data['response'][0]['price']))
+            except Exception:
+                pass
+
+    if symbol == 'XAUUSD':
+        data = await fetch_json("https://api.coingecko.com/api/v3/simple/price?ids=tether-gold&vs_currencies=usd")
+        if data and data.get('tether-gold', {}).get('usd'):
+            sources.append(float(data['tether-gold']['usd']))
+        return sources
+
+    data = await fetch_json(f"https://api.exchangerate.host/convert?from={from_currency}&to={to_currency}")
+    if data and data.get('result'):
+        sources.append(float(data['result']))
+
+    data = await fetch_json(f"https://api.frankfurter.app/latest?from={from_currency}&to={to_currency}")
+    if data and data.get('rates', {}).get(to_currency):
+        sources.append(float(data['rates'][to_currency]))
+
+    data = await fetch_json(f"https://open.er-api.com/v6/latest/{from_currency}")
+    if data and data.get('result') == 'success' and data.get('rates', {}).get(to_currency):
+        sources.append(float(data['rates'][to_currency]))
+
+    return sources
+
 
 async def get_forex_price(symbol):
-    if FCSAPI_KEY:
-        try:
-            if symbol == 'XAUUSD':
-                url = f"https://fcsapi.com/api-v3/commodity/latest?symbol={symbol}&type=commodity&access_key={FCSAPI_KEY}"
-            else:
-                url = f"https://fcsapi.com/api-v3/forex/latest?symbol={symbol}&access_key={FCSAPI_KEY}"
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=10) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if data.get('status') and data.get('response'):
-                            price = float(data['response'][0]['price'])
-                            print(f"✅ [FCS API] {symbol} = {price}")
-                            return price
-        except:
-            pass
-    
-    try:
-        if symbol == 'XAUUSD':
-            url = "https://api.exchangerate.host/convert?from=XAU&to=USD"
-        elif symbol == 'EURUSD':
-            url = "https://api.exchangerate.host/convert?from=EUR&to=USD"
-        elif symbol == 'GBPUSD':
-            url = "https://api.exchangerate.host/convert?from=GBP&to=USD"
-        elif symbol == 'USDJPY':
-            url = "https://api.exchangerate.host/convert?from=USD&to=JPY"
-        else:
-            from_currency = symbol[:3]
-            to_currency = symbol[3:]
-            url = f"https://api.exchangerate.host/convert?from={from_currency}&to={to_currency}"
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if 'result' in data:
-                        price = float(data['result'])
-                        print(f"✅ [ExchangeRate.host] {symbol} = {price}")
-                        return price
-    except:
-        pass
-    
-    if symbol != 'XAUUSD':
-        try:
-            from_currency = symbol[:3]
-            to_currency = symbol[3:]
-            url = f"https://api.frankfurter.app/latest?from={from_currency}&to={to_currency}"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=10) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if 'rates' in data and to_currency in data['rates']:
-                            price = float(data['rates'][to_currency])
-                            print(f"✅ [Frankfurter] {symbol} = {price}")
-                            return price
-        except:
-            pass
-    
-    if symbol == 'XAUUSD':
-        try:
-            url = "https://api.coingecko.com/api/v3/simple/price?ids=tether-gold&vs_currencies=usd"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=10) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if 'tether-gold' in data:
-                            price = float(data['tether-gold']['usd'])
-                            print(f"✅ [CoinGecko] XAUUSD = {price}")
-                            return price
-        except:
-            pass
-    
-    print(f"❌ All sources failed for {symbol}")
-    return None
+    prices = await get_forex_sources(symbol)
+    if not prices:
+        print(f"❌ All sources failed for {symbol}")
+        return None
+    stable_price = median(prices)
+    print(f"✅ [FOREX-MEDIAN] {symbol} = {stable_price} from {len(prices)} source(s)")
+    return stable_price
+
 
 async def get_price_with_fallback(asset_type, symbol):
     if asset_type == 'crypto':
-        price = await get_crypto_price(symbol)
-        if not price:
-            price = await get_crypto_price_fallback(symbol)
-        return price
-    else:
-        return await get_forex_price(symbol)
+        return await get_crypto_price(symbol)
+    return await get_forex_price(symbol)
+
 
 DASHBOARD_HTML = '''
 <!DOCTYPE html>
@@ -346,6 +498,7 @@ DASHBOARD_HTML = '''
                 <tr>
                     <th>ID</th>
                     <th>Username</th>
+                    <th>Lang</th>
                     <th>Status</th>
                     <th>Alerts</th>
                     <th>Start Date</th>
@@ -360,6 +513,7 @@ DASHBOARD_HTML = '''
                 <tr>
                     <td>{{ user.user_id }}</td>
                     <td>@{{ user.username or 'Unknown' }}</td>
+                    <td>{{ user.language }}</td>
                     <td>
                         {% if user.is_premium %}
                             <span class="premium-badge">⭐ Premium</span>
@@ -406,6 +560,7 @@ DASHBOARD_HTML = '''
 
 web_app = Flask(__name__)
 
+
 @web_app.route('/', methods=['GET', 'POST'])
 def dashboard():
     if request.method == 'POST':
@@ -419,36 +574,51 @@ def dashboard():
             return redirect(url_for('dashboard'))
     users = get_all_users_for_dashboard()
     total_users, premium_users, active_alerts = get_stats()
-    return render_template_string(DASHBOARD_HTML, 
-                                  users=users, 
-                                  total_users=total_users, 
-                                  premium_users=premium_users, 
-                                  active_alerts=active_alerts, 
+    return render_template_string(DASHBOARD_HTML,
+                                  users=users,
+                                  total_users=total_users,
+                                  premium_users=premium_users,
+                                  active_alerts=active_alerts,
                                   max_free=MAX_FREE_ALERTS,
                                   now=datetime.now().isoformat())
 
+
 def run_web_server():
-    web_app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
+    web_app.run(host='0.0.0.0', port=DASHBOARD_PORT, debug=False, use_reloader=False)
+
 
 Thread(target=run_web_server, daemon=True).start()
 
+
 # ========== Bot Menus ==========
-def get_main_menu():
+def get_main_menu(lang="en"):
     keyboard = [
-        [InlineKeyboardButton("➕ Add Alert", callback_data="add_alert")],
-        [InlineKeyboardButton("📋 My Alerts", callback_data="my_alerts")],
-        [InlineKeyboardButton("💰 Prices", callback_data="prices")],
-        [InlineKeyboardButton("⭐ My Plan", callback_data="myplan")],
-        [InlineKeyboardButton("📞 Support", callback_data="support")],
+        [InlineKeyboardButton(tr(lang, "btn_add_alert"), callback_data="add_alert")],
+        [InlineKeyboardButton(tr(lang, "btn_my_alerts"), callback_data="my_alerts")],
+        [InlineKeyboardButton(tr(lang, "btn_prices"), callback_data="prices")],
+        [InlineKeyboardButton(tr(lang, "btn_my_plan"), callback_data="myplan")],
+        [InlineKeyboardButton(tr(lang, "btn_support"), callback_data="support")],
+        [InlineKeyboardButton(tr(lang, "btn_language"), callback_data="change_language")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
-def get_asset_type_menu():
+
+def get_language_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("English 🇬🇧", callback_data="lang_en")],
+        [InlineKeyboardButton("Русский 🇷🇺", callback_data="lang_ru")],
+        [InlineKeyboardButton("العربية 🇸🇦", callback_data="lang_ar")],
+        [InlineKeyboardButton("🔙 Back", callback_data="back_main")],
+    ])
+
+
+def get_asset_type_menu(lang="en"):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("₿ Crypto", callback_data="asset_crypto")],
         [InlineKeyboardButton("💱 Forex", callback_data="asset_forex")],
         [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
     ])
+
 
 def get_crypto_menu():
     keyboard = []
@@ -464,6 +634,7 @@ def get_crypto_menu():
     keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_asset")])
     return InlineKeyboardMarkup(keyboard)
 
+
 def get_forex_menu():
     keyboard = []
     row = []
@@ -478,77 +649,97 @@ def get_forex_menu():
     keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_asset")])
     return InlineKeyboardMarkup(keyboard)
 
+
+def get_direction_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔺 Above", callback_data="direction_above")],
+        [InlineKeyboardButton("🔻 Below", callback_data="direction_below")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
+    ])
+
+
 def get_cancel_menu():
     return InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel")]])
+
 
 # ========== Bot Handlers ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     save_user(user.id, user.username)
+    lang = get_user_lang(user.id)
     await update.message.reply_text(
-        "🚀 *BRIDGES - Crypto & Forex Alert Bot*\n\n"
-        "Monitor prices and receive instant alerts!\n\n"
-        "• Free plan: 3 active alerts\n"
-        "• Premium: Unlimited alerts ($5/month)\n\n"
-        "Choose an option:",
+        f"{tr(lang, 'app_title')}\n\n"
+        f"{tr(lang, 'start_body', max_alerts=MAX_FREE_ALERTS)}",
         parse_mode="Markdown",
-        reply_markup=get_main_menu()
+        reply_markup=get_main_menu(lang)
     )
+
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
     user_id = query.from_user.id
+    lang = get_user_lang(user_id)
 
     if data == "cancel":
         context.user_data.clear()
-        await query.edit_message_text("❌ Cancelled.", reply_markup=get_main_menu())
+        await query.edit_message_text(tr(lang, "cancelled"), reply_markup=get_main_menu(lang))
+        return
+
+    if data == "back_main":
+        await query.edit_message_text(tr(lang, "select_asset"), reply_markup=get_main_menu(lang))
+        return
+
+    if data == "change_language":
+        await query.edit_message_text(tr(lang, "lang_title"), parse_mode="Markdown", reply_markup=get_language_menu())
+        return
+
+    if data.startswith("lang_"):
+        selected = data.split("_", 1)[1]
+        set_user_language(user_id, selected)
+        lang = get_user_lang(user_id)
+        await query.edit_message_text(
+            tr(lang, "lang_changed", lang_name=tr(lang, "language_name")),
+            reply_markup=get_main_menu(lang)
+        )
         return
 
     if data == "support":
         await query.edit_message_text(
-            f"📞 *Support & Premium Upgrade*\n\n"
-            f"⭐ *Upgrade to Premium:*\n"
-            f"💰 *Price:* $5/month\n"
-            f"✨ *Benefits:* Unlimited alerts + Priority support\n\n"
-            f"📱 *Contact us to upgrade:*\n"
-            f"• WhatsApp: {SUPPORT_PHONE}\n"
-            f"• Telegram: @{SUPPORT_USERNAME}\n\n"
-            f"🕒 *Hours:* 9AM - 5PM (Friday off)\n\n"
-            f"_After payment, your account will be activated within minutes_",
+            tr(lang, "support", phone=SUPPORT_PHONE, username=SUPPORT_USERNAME),
             parse_mode="Markdown",
-            reply_markup=get_main_menu()
+            reply_markup=get_main_menu(lang)
         )
         return
 
     if data == "myplan":
         user = get_user(user_id)
         active_count = get_active_alerts_count(user_id)
-        if user and user[2] == 1:
-            expiry = user[3]
+        if user and user[3] == 1:
+            expiry = user[4]
             if expiry:
                 days_left = (datetime.fromisoformat(expiry) - datetime.now()).days
                 await query.edit_message_text(
-                    f"🌟 *Your Plan: Premium*\n\n📊 Active alerts: {active_count} / unlimited\n📅 Expires in: {days_left} days\n💎 You have full access!",
-                    parse_mode="Markdown", reply_markup=get_main_menu())
+                    tr(lang, "plan_premium", count=active_count, days=days_left),
+                    parse_mode="Markdown", reply_markup=get_main_menu(lang))
             else:
                 await query.edit_message_text(
-                    f"🌟 *Your Plan: Premium*\n\n📊 Active alerts: {active_count} / unlimited\n💎 You have full access!",
-                    parse_mode="Markdown", reply_markup=get_main_menu())
+                    tr(lang, "plan_premium_no_exp", count=active_count),
+                    parse_mode="Markdown", reply_markup=get_main_menu(lang))
         else:
             await query.edit_message_text(
-                f"📊 *Your Plan: Free*\n\n📈 Active alerts: {active_count} / {MAX_FREE_ALERTS}\n\n💰 Upgrade to Premium ($5/month) for unlimited alerts!\n📱 Contact: @{SUPPORT_USERNAME}",
-                parse_mode="Markdown", reply_markup=get_main_menu())
+                tr(lang, "plan_free", count=active_count, max_alerts=MAX_FREE_ALERTS, support=SUPPORT_USERNAME),
+                parse_mode="Markdown", reply_markup=get_main_menu(lang))
         return
 
     if data == "prices":
-        msg = "*💰 Live Prices:*\n\n*₿ Crypto:*\n"
-        for coin in ['BTC', 'ETH', 'SOL']:
+        msg = tr(lang, "prices_header") + "\n"
+        for coin in ['BTC', 'ETH', 'SOL', 'BNB']:
             price = await get_price_with_fallback('crypto', coin)
-            msg += f"• *{coin}:* ${price:,.2f}\n" if price else f"• *{coin}:* ⚠️\n"
-        msg += "\n*💱 Forex:*\n"
-        for fx in ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD']:
+            msg += f"• *{coin}:* ${price:,.2f}\n" if price else f"• *{coin}:* {tr(lang, 'price_unavailable')}\n"
+        msg += tr(lang, "prices_forex") + "\n"
+        for fx in ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'USDCHF']:
             price = await get_price_with_fallback('forex', fx)
             if price:
                 if fx == 'USDJPY':
@@ -558,112 +749,120 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     msg += f"• *{fx}:* {price:.5f}\n"
             else:
-                msg += f"• {fx}: ⚠️\n"
-        await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=get_main_menu())
+                msg += f"• {fx}: {tr(lang, 'price_unavailable')}\n"
+        await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=get_main_menu(lang))
         return
 
     if data == "my_alerts":
         alerts = get_user_alerts(user_id)
         if not alerts:
-            await query.edit_message_text("📋 No active alerts.", reply_markup=get_main_menu())
+            await query.edit_message_text(tr(lang, "no_alerts"), reply_markup=get_main_menu(lang))
             return
-        msg = "*📋 Your Alerts:*\n\n"
+        msg = tr(lang, "my_alerts_title") + "\n\n"
         for alert in alerts:
-            alert_id, asset_type, symbol, price, direction = alert
-            dir_text = "🔺 Above" if direction == "above" else "🔻 Below"
+            _, asset_type, symbol, price, direction = alert
+            dir_text = tr(lang, "dir_above") if direction == "above" else tr(lang, "dir_below")
             emoji = "₿" if asset_type == "crypto" else "💱"
-            msg += f"• {emoji} {symbol} {dir_text} ${price:,.2f}\n"
-        await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=get_main_menu())
+            msg += tr(lang, "alert_line", emoji=emoji, symbol=symbol, dir_text=dir_text, price=price) + "\n"
+        await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=get_main_menu(lang))
         return
 
     if data == "add_alert":
         context.user_data.clear()
-        await query.edit_message_text("➕ *Add New Alert*\n\nChoose asset type:", parse_mode="Markdown", reply_markup=get_asset_type_menu())
+        await query.edit_message_text(tr(lang, "add_alert_title"), parse_mode="Markdown", reply_markup=get_asset_type_menu(lang))
         return
 
     if data == "back_to_asset":
-        await query.edit_message_text("Choose asset type:", reply_markup=get_asset_type_menu())
+        await query.edit_message_text(tr(lang, "select_asset"), reply_markup=get_asset_type_menu(lang))
         return
 
     if data == "asset_crypto":
         context.user_data['asset_type'] = 'crypto'
-        await query.edit_message_text("Choose crypto symbol:", reply_markup=get_crypto_menu())
+        await query.edit_message_text(tr(lang, "choose_crypto"), reply_markup=get_crypto_menu())
         return
 
     if data == "asset_forex":
         context.user_data['asset_type'] = 'forex'
-        await query.edit_message_text("Choose forex pair:", reply_markup=get_forex_menu())
+        await query.edit_message_text(tr(lang, "choose_forex"), reply_markup=get_forex_menu())
         return
 
     if data.startswith("crypto_"):
         symbol = data.split("_")[1]
         context.user_data['symbol'] = symbol
-        context.user_data['step'] = 'waiting_price'
-        await query.edit_message_text(f"✅ Selected: {symbol}\n\n📝 Send target price (e.g., 50000):", reply_markup=get_cancel_menu())
+        context.user_data['step'] = 'waiting_direction'
+        await query.edit_message_text(tr(lang, "choose_direction", symbol=symbol), reply_markup=get_direction_menu())
         return
 
     if data.startswith("forex_"):
         symbol = data.split("_")[1]
         context.user_data['symbol'] = symbol
+        context.user_data['step'] = 'waiting_direction'
+        await query.edit_message_text(tr(lang, "choose_direction", symbol=symbol), reply_markup=get_direction_menu())
+        return
+
+    if data == "direction_above" or data == "direction_below":
+        direction = data.split("_")[1]
+        context.user_data['direction'] = direction
         context.user_data['step'] = 'waiting_price'
-        await query.edit_message_text(f"✅ Selected: {symbol}\n\n📝 Send target price (e.g., 1.1050):", reply_markup=get_cancel_menu())
+        dir_text = tr(lang, "dir_above") if direction == "above" else tr(lang, "dir_below")
+        await query.edit_message_text(tr(lang, "dir_saved", dir_text=dir_text), reply_markup=get_cancel_menu())
         return
 
     if data == "custom_crypto":
         context.user_data['asset_type'] = 'crypto'
         context.user_data['step'] = 'waiting_custom_symbol'
-        await query.edit_message_text("✏️ Enter custom crypto symbol (e.g., LTC, MATIC):", reply_markup=get_cancel_menu())
+        await query.edit_message_text(tr(lang, "enter_custom_crypto"), reply_markup=get_cancel_menu())
         return
 
     if data == "custom_forex":
         context.user_data['asset_type'] = 'forex'
         context.user_data['step'] = 'waiting_custom_symbol'
-        await query.edit_message_text("✏️ Enter custom forex pair (e.g., EURGBP):", reply_markup=get_cancel_menu())
+        await query.edit_message_text(tr(lang, "enter_custom_forex"), reply_markup=get_cancel_menu())
         return
+
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    lang = get_user_lang(user_id)
     text = update.message.text.strip().upper()
 
     if 'step' not in context.user_data:
-        await update.message.reply_text("🌟 Use the buttons.", reply_markup=get_main_menu())
+        await update.message.reply_text(tr(lang, "use_buttons"), reply_markup=get_main_menu(lang))
         return
 
     step = context.user_data['step']
 
     if step == 'waiting_custom_symbol':
         context.user_data['symbol'] = text
-        context.user_data['step'] = 'waiting_price'
-        await update.message.reply_text(f"✅ Symbol: {text}\n\n📝 Send target price:", reply_markup=get_cancel_menu())
+        context.user_data['step'] = 'waiting_direction'
+        await update.message.reply_text(tr(lang, "choose_direction", symbol=text), reply_markup=get_direction_menu())
         return
 
     if step == 'waiting_price':
-        print(f"[DEBUG] User entered: {text}")
         try:
             price = float(text.replace(',', '.'))
-            print(f"[DEBUG] Successfully converted to: {price}")
             asset_type = context.user_data.get('asset_type')
             symbol = context.user_data.get('symbol')
+            direction = context.user_data.get('direction', 'above')
             user = get_user(user_id)
-            if not user or user[2] == 0:
+            if not user or user[3] == 0:
                 active_count = get_active_alerts_count(user_id)
                 if active_count >= MAX_FREE_ALERTS:
                     await update.message.reply_text(
-                        f"⚠️ *Free limit reached ({MAX_FREE_ALERTS} alerts)!*\n\n"
-                        f"Upgrade to Premium ($5/month) for unlimited alerts.\n"
-                        f"📱 Contact: @{SUPPORT_USERNAME}",
-                        parse_mode="Markdown", reply_markup=get_main_menu())
+                        tr(lang, "free_limit", max_alerts=MAX_FREE_ALERTS, support=SUPPORT_USERNAME),
+                        parse_mode="Markdown", reply_markup=get_main_menu(lang))
                     return
-            
-            save_alert(user_id, asset_type, symbol, price, 'above')
+
+            save_alert(user_id, asset_type, symbol, price, direction)
+            dir_text = tr(lang, "dir_above") if direction == "above" else tr(lang, "dir_below")
             await update.message.reply_text(
-                f"✅ *Alert added!*\n\n• {symbol}\n• Target: ${price:,.2f}\n• Direction: 🔺 Above",
-                parse_mode="Markdown", reply_markup=get_main_menu())
+                tr(lang, "alert_added", symbol=symbol, price=price, dir_text=dir_text),
+                parse_mode="Markdown", reply_markup=get_main_menu(lang))
             context.user_data.clear()
-        except Exception as e:
-            print(f"[DEBUG] Conversion failed for '{text}': {e}")
-            await update.message.reply_text("⚠️ Send a valid number (e.g., 1.1050).", reply_markup=get_cancel_menu())
+        except Exception:
+            await update.message.reply_text(tr(lang, "invalid_number"), reply_markup=get_cancel_menu())
         return
+
 
 async def check_expired_subscriptions(app):
     while True:
@@ -672,47 +871,46 @@ async def check_expired_subscriptions(app):
             c = conn.cursor()
             now = datetime.now()
             three_days_later = now + timedelta(days=3)
-            
+
             c.execute('''
-                SELECT user_id, username, premium_until FROM users 
+                SELECT user_id, username, language, premium_until FROM users
                 WHERE is_premium = 1 AND premium_until IS NOT NULL
             ''')
             users = c.fetchall()
             conn.close()
-            
+
             for user in users:
-                user_id, username, premium_until = user
+                user_id, _, lang, premium_until = user
+                lang = lang if lang in SUPPORTED_LANGS else "en"
                 premium_until = datetime.fromisoformat(premium_until)
-                
+
                 if premium_until < now:
                     downgrade_user(user_id)
                     try:
                         await app.bot.send_message(
                             chat_id=user_id,
-                            text=f"⚠️ *Your Premium subscription has expired!*\n\n"
-                                 f"Your account has been downgraded to Free.\n"
-                                 f"To renew, please contact: @{SUPPORT_USERNAME}",
+                            text=tr(lang, "sub_expired", support=SUPPORT_USERNAME),
                             parse_mode="Markdown"
                         )
-                    except:
+                    except Exception:
                         pass
-                
+
                 elif premium_until <= three_days_later:
                     days_left = (premium_until - now).days
                     try:
                         await app.bot.send_message(
                             chat_id=user_id,
-                            text=f"🔔 *Reminder: Your Premium subscription expires in {days_left} days!*\n\n"
-                                 f"Please contact @{SUPPORT_USERNAME} to renew and avoid interruption.",
+                            text=tr(lang, "sub_reminder", days=days_left, support=SUPPORT_USERNAME),
                             parse_mode="Markdown"
                         )
-                    except:
+                    except Exception:
                         pass
-            
+
             await asyncio.sleep(86400)
         except Exception as e:
             print(f"⚠️ Error checking subscriptions: {e}")
             await asyncio.sleep(86400)
+
 
 async def check_prices(app):
     while True:
@@ -722,11 +920,11 @@ async def check_prices(app):
             c.execute('SELECT id, user_id, asset_type, symbol, target_price, direction FROM alerts WHERE is_active = 1')
             alerts = c.fetchall()
             conn.close()
-            
+
             for alert in alerts:
                 alert_id, user_id, asset_type, symbol, target, direction = alert
                 current = await get_price_with_fallback(asset_type, symbol)
-                
+
                 if current:
                     triggered = (direction == 'above' and current >= target) or (direction == 'below' and current <= target)
                     if triggered:
@@ -741,33 +939,36 @@ async def check_prices(app):
             print(f"⚠️ Error checking prices: {e}")
             await asyncio.sleep(60)
 
+
 # ========== Run Bot with Auto-Restart ==========
 app = None
 
+
 async def run_bot():
     global app
+    if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == "YOUR_BOT_TOKEN":
+        raise RuntimeError("TELEGRAM_TOKEN is not set. Put it into .env or environment variables.")
+
     while True:
         try:
             app = Application.builder().token(TELEGRAM_TOKEN).build()
             app.add_handler(CommandHandler("start", start))
             app.add_handler(CallbackQueryHandler(button_handler))
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-            
-            # Run background tasks
+
             asyncio.create_task(check_prices(app))
             asyncio.create_task(check_expired_subscriptions(app))
-            
+
             print("✅ BRIDGES Bot is running...")
-            print("🌐 Dashboard: http://localhost:8080")
-            
+            print(f"🌐 Dashboard: http://localhost:{DASHBOARD_PORT}")
+
             await app.initialize()
             await app.start()
             await app.updater.start_polling()
-            
-            # Keep running until interrupted
+
             while True:
                 await asyncio.sleep(1)
-                
+
         except Exception as e:
             print(f"❌ Bot crashed: {e}")
             print("🔄 Restarting in 10 seconds...")
@@ -776,19 +977,21 @@ async def run_bot():
             if app:
                 try:
                     await app.stop()
-                except:
+                except Exception:
                     pass
+
 
 def signal_handler(sig, frame):
     print("\n🛑 Shutting down gracefully...")
     sys.exit(0)
 
+
 def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-    
+
     init_db()
-    
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -797,6 +1000,7 @@ def main():
         print("\n✅ Bot stopped by user")
     finally:
         loop.close()
+
 
 if __name__ == "__main__":
     main()
